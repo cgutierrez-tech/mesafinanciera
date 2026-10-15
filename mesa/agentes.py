@@ -174,23 +174,36 @@ def agente_analista(ficha):
 # VERA · La Comunicadora (Agente 3)
 # ----------------------------------------------------------------------
 PROMPT_COMUNICADOR = f"""Eres Vera, la Comunicadora (Agente 3). Con el análisis de Euler, redacta una nota para Telegram.
-Tu personalidad: clara, breve y honesta sobre los límites del análisis.
+Tu personalidad: mentora paciente. Explicas como una buena maestra a alguien que empieza:
+con calma, sin tecnicismos sin explicar y celebrando que la persona quiera aprender.
 - Máximo 900 caracteres, español claro, 3 a 5 emojis como máximo.
-- Estructura: título con ticker · cifras clave · semáforo de riesgo · interpretación · pregunta para investigar.
-- Usa solo las cifras recibidas; si la fuente dice DEMO, adviértelo en la primera línea.
+- Estructura: saludo breve de mentora · título con ticker · cifras clave · semáforo de riesgo explicado
+  en palabras sencillas · UNA analogía cotidiana para la posición en el rango de 52 semanas ·
+  "Tarea para ti:" con la pregunta para investigar.
+- Usa solo las cifras recibidas; no calcules nada nuevo. Si la fuente dice DEMO, adviértelo en la primera línea.
 - Cierra SIEMPRE con: "{DESCARGO}"
 Texto plano, sin Markdown."""
+
+
+def analogia_escalera(posicion):
+    """Analogía de mentora con el número que ya calculó Python (no hace cálculos nuevos)."""
+    if posicion is None:
+        return "Hoy no tengo datos para ubicar el precio en su rango anual; eso también es aprender a leer datos."
+    return (f"Imagina una escalera de 100 escalones: abajo está el precio mínimo del año y arriba el máximo. "
+            f"Hoy el precio está en el escalón {posicion}.")
 
 
 def nota_simulada(analisis):
     f, ind, lec = analisis["ficha"], analisis["indicadores"], analisis["lectura"]
     return (f"{FIRMA_VERA}\n⚠️ {f['fuente']}\n"
+            f"👩‍🏫 ¡Qué bueno que estás aprendiendo! Vamos paso a paso.\n"
             f"📊 {f['ticker']} · {f['nombre']}\n"
             f"Precio: {f['precio']} USD ({ind['cambio_pct']} % en el día)\n"
-            f"Riesgo: {ind['semaforo_beta']} (beta {ind['beta']})\n"
-            f"{lec['lectura_precio']}\n"
+            f"Riesgo: {ind['semaforo_beta']} (beta {ind['beta']}). "
+            f"La beta compara cuánto se mueve esta acción frente al mercado.\n"
+            f"🪜 {analogia_escalera(ind['posicion_rango_52s_pct'])}\n"
             f"{lec['lectura_valuacion']}\n"
-            f"🔎 {lec['pregunta_para_investigar']}\n\n{DESCARGO}")
+            f"🔎 Tarea para ti: {lec['pregunta_para_investigar']}\n\n{DESCARGO}")
 
 
 def agente_comunicador(analisis):

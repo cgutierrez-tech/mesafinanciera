@@ -1,12 +1,16 @@
 # Mesa Financiera en la nube: funciona con tu computadora apagada.
-#  · Cada 10 minutos revisa si escribiste /analiza TICKER en Telegram y responde.
+#  · En horario bursátil (lunes a viernes, 7:30–14:00 hora CDMX) revisa cada 15 minutos
+#    si escribiste /analiza TICKER en Telegram y responde.
 #  · También puedes lanzarlo a mano (incluso desde la app de GitHub en tu celular):
 #    Actions → mesa-financiera → Run workflow → escribe el ticker.
 name: mesa-financiera
 
 on:
   schedule:
-    - cron: "*/10 * * * *"          # hora UTC; GitHub puede retrasar unos minutos las ejecuciones
+    # Hora UTC (CDMX = UTC-6 todo el año). GitHub puede retrasar unos minutos las ejecuciones.
+    - cron: "30,45 13 * * 1-5"      # 7:30 y 7:45 CDMX
+    - cron: "*/15 14-19 * * 1-5"    # 8:00 a 13:45 CDMX, cada 15 min
+    - cron: "0 20 * * 1-5"          # 14:00 CDMX, última revisión del día
   workflow_dispatch:
     inputs:
       ticker:
@@ -34,7 +38,10 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-      MODO_SIMULACION: ${{ inputs.simulacion && '1' || '0' }}
+      # Interruptor seguro: SIMULADO por defecto, también en el cron.
+      # Para pasar a REAL crea la variable del repositorio MODO_SIMULACION = 0
+      # (Settings → Secrets and variables → Actions → Variables) y no marques la casilla.
+      MODO_SIMULACION: ${{ (inputs.simulacion || vars.MODO_SIMULACION != '0') && '1' || '0' }}
       TICKER: ${{ inputs.ticker }}  # se pasa como variable, nunca se pega dentro del comando
     steps:
       - uses: actions/checkout@v7

@@ -139,3 +139,13 @@ def test_los_agentes_se_presentan_con_su_nombre():
     for nombre in ("Batuta", "Iris", "Euler", "Vera"):
         assert nombre in texto
     assert r["entrega_3_nota"].startswith(agentes.FIRMA_VERA)
+
+
+def test_vera_mentora_usa_analogia_con_el_numero_de_python():
+    """Vera explica como mentora, pero el número de la analogía es el que calculó Python."""
+    r = pl.pipeline("AAPL", avisar=lambda _: None)
+    nota = r["entrega_3_nota"]
+    posicion = r["entrega_2_analisis"]["indicadores"]["posicion_rango_52s_pct"]   # 50.0 con datos demo
+    assert f"escalón {posicion}" in nota
+    assert "Tarea para ti:" in nota
+    assert nota.rstrip().endswith(agentes.DESCARGO)
