@@ -38,7 +38,10 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-      MODO_SIMULACION: ${{ inputs.simulacion && '1' || '0' }}
+      # Interruptor seguro: SIMULADO por defecto, también en el cron.
+      # Para pasar a REAL crea la variable del repositorio MODO_SIMULACION = 0
+      # (Settings → Secrets and variables → Actions → Variables) y no marques la casilla.
+      MODO_SIMULACION: ${{ (inputs.simulacion || vars.MODO_SIMULACION != '0') && '1' || '0' }}
       TICKER: ${{ inputs.ticker }}  # se pasa como variable, nunca se pega dentro del comando
     steps:
       - uses: actions/checkout@v7
