@@ -25,9 +25,9 @@ def main():
                     try:
                         atender(actualizacion["message"])
                     except Exception as error:
-                        print(f"⚠️ {type(error).__name__}: {error}")
+                        print(config.ocultar(f"⚠️ {type(error).__name__}: {error}"))
         except requests.RequestException as error:
-            print("Conexión inestable, reintento en 5 s:", error)
+            print(config.ocultar(f"Conexión inestable, reintento en 5 s: {error}"))
             time.sleep(5)
 
 
