@@ -34,6 +34,20 @@ MODO_SIMULACION = _bandera("MODO_SIMULACION") or not (ANTHROPIC_API_KEY and ALPH
 MAX_ANALISIS_POR_RUN = int(_texto("MAX_ANALISIS_POR_RUN", "3"))   # cuida la cuota de Alpha Vantage
 CARPETA_SALIDAS = _texto("CARPETA_SALIDAS", "salidas")
 
+# Guardrails de gasto (modo REAL). Ajustables con variables de entorno.
+MAX_TOKENS_POR_ANALISIS = int(_texto("MAX_TOKENS_POR_ANALISIS", "30000"))  # entrada + salida, los 3 agentes
+MAX_ANALISIS_POR_DIA = int(_texto("MAX_ANALISIS_POR_DIA", "10"))           # por proceso (bot en vivo / terminal)
+
+
+def ocultar(texto):
+    """Reemplaza cualquier llave por *** antes de imprimir o enviar un texto (errores, avisos, logs)."""
+    texto = str(texto)
+    for nombre in ("TELEGRAM_BOT_TOKEN", "ANTHROPIC_API_KEY", "ALPHAVANTAGE_API_KEY"):
+        valor = globals().get(nombre)          # se lee al momento: respeta cambios hechos en pruebas
+        if valor and len(valor) >= 6:
+            texto = texto.replace(valor, "***")
+    return texto
+
 
 def resumen():
     """Estado de la configuración sin revelar ningún valor secreto."""
