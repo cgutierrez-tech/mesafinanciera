@@ -74,7 +74,7 @@ def test_agentes_reales_encadenan_con_claude_simulado(monkeypatch):
     """Imita las respuestas de Claude para revisar el camino 'real' sin gastar llaves."""
     monkeypatch.setattr(config, "MODO_SIMULACION", False)
 
-    def claude_falso(system, mensaje, usar_mcp=False, max_tokens=900):
+    def claude_falso(system, mensaje, usar_mcp=False, max_tokens=900, agente="?"):
         if usar_mcp:
             return ('{"nombre":"IBM","sector":"Tech","precio":"250.5","cambio_pct":"-0.8%",'
                     '"pe_ratio":"40.1","beta":"0.7","max_52s":"300","min_52s":"200"}', ["GLOBAL_QUOTE"])
@@ -149,3 +149,124 @@ def test_vera_mentora_usa_analogia_con_el_numero_de_python():
     assert f"escalón {posicion}" in nota
     assert "Tarea para ti:" in nota
     assert nota.rstrip().endswith(agentes.DESCARGO)
+
+
+# ----------------------------------------------------------------------
+# Guardrails de seguridad
+# ----------------------------------------------------------------------
+TOKEN_FALSO = "123456:TOKEN-FALSO-DE-PRUEBA"
+
+
+def test_guardrail_1_errores_de_red_no_muestran_el_token(monkeypatch):
+    import requests
+    from mesa import telegram_io
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", TOKEN_FALSO)
+
+    def red_caida(verbo, url, **kwargs):
+        raise requests.ConnectionError(f"Max retries exceeded with url: {url}")
+    monkeypatch.setattr(telegram_io.requests, "request", red_caida)
+    with pytest.raises(requests.RequestException) as error:      # el bot sigue reconociéndolo como error de red
+        telegram_io.obtener_mensajes()
+    assert TOKEN_FALSO not in str(error.value) and "***" in str(error.value)
+    assert error.value.__suppress_context__                       # el error original (con token) no se imprime
+
+
+def test_guardrail_1_ocultar_limpia_todas_las_llaves(monkeypatch):
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-ant-falsa-123")
+    monkeypatch.setattr(config, "ALPHAVANTAGE_API_KEY", "AVFALSA999")
+    texto = config.ocultar("url?apikey=AVFALSA999 y llave sk-ant-falsa-123")
+    assert "AVFALSA999" not in texto and "sk-ant-falsa-123" not in texto
+
+
+def test_guardrail_2_sin_chat_id_el_bot_no_atiende_a_nadie(monkeypatch):
+    from mesa import telegram_io
+    monkeypatch.setattr(config, "TELEGRAM_CHAT_ID", "")
+    assert not telegram_io.chat_autorizado(111)
+    enviados = []
+    monkeypatch.setattr(comandos, "enviar", lambda chat, texto: enviados.append(texto))
+    assert comandos.atender({"chat": {"id": 111}, "text": "/analiza AAPL"}) is None
+    assert enviados == ["Este bot es privado."]
+
+
+def test_guardrail_3_contar_solo_tus_analiza_pendientes(monkeypatch):
+    import revisar_telegram as rt
+    monkeypatch.setattr(config, "TELEGRAM_CHAT_ID", "111")
+    pendientes = [{"update_id": 1, "message": {"chat": {"id": 111}, "text": "/analiza AAPL"}},
+                  {"update_id": 2, "message": {"chat": {"id": 111}, "text": "hola"}},
+                  {"update_id": 3, "message": {"chat": {"id": 999}, "text": "/analiza MSFT"}}]
+    assert rt.contar_pendientes(pendientes) == 1      # ni "hola" ni el chat ajeno piden aprobación
+
+
+def test_guardrail_3_contar_no_confirma_ni_responde(monkeypatch, tmp_path):
+    import revisar_telegram as rt
+    salida = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(salida))
+    monkeypatch.setattr(rt.sys, "argv", ["revisar_telegram.py", "--contar"])
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "token-de-prueba")
+    monkeypatch.setattr(config, "TELEGRAM_CHAT_ID", "111")
+    monkeypatch.setattr(rt, "verificar_bot", lambda: "bot_prueba")
+    monkeypatch.setattr(rt, "preparar_polling", lambda: None)
+    monkeypatch.setattr(rt, "obtener_mensajes",
+                        lambda: [{"update_id": 5, "message": {"chat": {"id": 111}, "text": "/analiza AAPL"}}])
+    monkeypatch.setattr(rt, "confirmar_leidos", lambda _: pytest.fail("--contar no debe confirmar"))
+    monkeypatch.setattr(rt, "atender", lambda _: pytest.fail("--contar no debe responder"))
+    rt.main()
+    assert salida.read_text() == "pendientes=1\n"
+
+
+class _Uso:
+    def __init__(self, entrada, salida):
+        self.input_tokens, self.output_tokens = entrada, salida
+
+
+class _Respuesta:
+    def __init__(self, texto, entrada, salida):
+        self.content = [type("Bloque", (), {"type": "text", "text": texto})()]
+        self.usage = _Uso(entrada, salida)
+
+
+def test_guardrail_4_llamar_claude_registra_tokens(monkeypatch):
+    cliente = type("Cliente", (), {})()
+    cliente.messages = type("M", (), {"create": staticmethod(lambda **kw: _Respuesta("hola", 120, 30))})()
+    monkeypatch.setattr(agentes, "_cliente_claude", lambda: cliente)
+    agentes.reiniciar_registro()
+    agentes.llamar_claude("sistema", "mensaje", agente="Euler")
+    resumen = agentes.resumen_tokens()
+    assert resumen["llamadas"] == [{"agente": "Euler", "entrada": 120, "salida": 30}]
+    assert resumen["total"] == 150
+
+
+def test_guardrail_4_presupuesto_excedido_detiene_la_cadena(monkeypatch):
+    cliente = type("Cliente", (), {})()
+    cliente.messages = type("M", (), {"create": staticmethod(lambda **kw: _Respuesta("x", 900, 200))})()
+    monkeypatch.setattr(agentes, "_cliente_claude", lambda: cliente)
+    monkeypatch.setattr(config, "MAX_TOKENS_POR_ANALISIS", 1000)
+    agentes.reiniciar_registro()
+    with pytest.raises(agentes.PresupuestoExcedido):
+        agentes.llamar_claude("s", "m", agente="Vera")
+
+
+def test_guardrail_4_presupuesto_no_se_disfraza_de_datos_demo(monkeypatch):
+    monkeypatch.setattr(config, "MODO_SIMULACION", False)
+
+    def caro(*args, **kwargs):
+        raise agentes.PresupuestoExcedido("demasiados tokens")
+    monkeypatch.setattr(agentes, "llamar_claude", caro)
+    with pytest.raises(agentes.PresupuestoExcedido):
+        agentes.agente_recolector("AAPL")
+
+
+def test_guardrail_4_limite_diario_en_modo_real(monkeypatch):
+    monkeypatch.setattr(config, "MODO_SIMULACION", False)
+    monkeypatch.setattr(config, "MAX_ANALISIS_POR_DIA", 0)
+    with pytest.raises(pl.LimiteDiarioAlcanzado):
+        pl.pipeline("AAPL", avisar=lambda _: None)
+
+
+def test_guardrail_4_evidencia_incluye_registro_de_tokens():
+    avisos = []
+    r = pl.pipeline("AAPL", avisar=avisos.append)
+    assert r["registro_tokens"]["total"] == 0                     # simulación: no se llamó a Claude
+    assert any("Registro de tokens" in a for a in avisos)
+    bitacora = os.path.join(config.CARPETA_SALIDAS, "registro_tokens.jsonl")
+    assert json.loads(open(bitacora, encoding="utf-8").readline())["ticker"] == "AAPL"
