@@ -3,6 +3,13 @@
 #    si escribiste /analiza TICKER en Telegram y responde.
 #  · También puedes lanzarlo a mano (incluso desde la app de GitHub en tu celular):
 #    Actions → mesa-financiera → Run workflow → escribe el ticker.
+#
+# Guardrails:
+#  1. SIMULADO por defecto. REAL solo si creas la variable del repositorio MODO_SIMULACION = 0.
+#  2. Aprobación humana: en modo REAL el análisis corre en el Environment "real", que debe tener
+#     tu usuario como revisor obligatorio (Settings → Environments → real → Required reviewers).
+#  3. Mínimo privilegio: el paso "decidir" no recibe llaves de IA, y en SIMULADO tampoco el análisis.
+#  4. Solo se pide aprobación cuando hay trabajo: un /analiza de tu chat o un ticker manual.
 name: mesa-financiera
 
 on:
@@ -30,18 +37,53 @@ permissions:
   contents: read
 
 jobs:
+  decidir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:                            # solo Telegram: este paso nunca ve las llaves de IA
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      MODO_SIMULACION: "1"
+    outputs:
+      modo: ${{ steps.modo.outputs.modo }}
+      trabajo: ${{ steps.modo.outputs.trabajo }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Contar tus /analiza pendientes (sin leerlos ni responder)
+        id: contar
+        run: python revisar_telegram.py --contar
+      - name: Decidir modo y si hay trabajo
+        id: modo
+        env:
+          MODO: ${{ (inputs.simulacion || vars.MODO_SIMULACION != '0') && 'SIMULACION' || 'REAL' }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' && inputs.ticker != '' }}
+          PENDIENTES: ${{ steps.contar.outputs.pendientes }}
+        run: |
+          TRABAJO=false
+          if [ "$MANUAL" = "true" ] || [ "${PENDIENTES:-0}" != "0" ]; then TRABAJO=true; fi
+          echo "modo=$MODO" >> "$GITHUB_OUTPUT"
+          echo "trabajo=$TRABAJO" >> "$GITHUB_OUTPUT"
+          echo "Modo: $MODO · ¿hay trabajo?: $TRABAJO (pendientes: ${PENDIENTES:-0}, manual: $MANUAL)"
+
   mesa:
+    needs: decidir
+    if: needs.decidir.outputs.trabajo == 'true'
+    # REAL → espera tu aprobación en el Environment "real". SIMULACION → corre sin pausa.
+    environment: ${{ needs.decidir.outputs.modo == 'REAL' && 'real' || 'simulacion' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
-      # Interruptor seguro: SIMULADO por defecto, también en el cron.
-      # Para pasar a REAL crea la variable del repositorio MODO_SIMULACION = 0
-      # (Settings → Secrets and variables → Actions → Variables) y no marques la casilla.
-      MODO_SIMULACION: ${{ (inputs.simulacion || vars.MODO_SIMULACION != '0') && '1' || '0' }}
+      # Mínimo privilegio: las llaves de IA solo existen en el job si el modo es REAL
+      ANTHROPIC_API_KEY: ${{ needs.decidir.outputs.modo == 'REAL' && secrets.ANTHROPIC_API_KEY || '' }}
+      ALPHAVANTAGE_API_KEY: ${{ needs.decidir.outputs.modo == 'REAL' && secrets.ALPHAVANTAGE_API_KEY || '' }}
+      MODO_SIMULACION: ${{ needs.decidir.outputs.modo == 'REAL' && '0' || '1' }}
       TICKER: ${{ inputs.ticker }}  # se pasa como variable, nunca se pega dentro del comando
     steps:
       - uses: actions/checkout@v7
@@ -59,7 +101,7 @@ jobs:
       - name: Revisar mensajes pendientes en Telegram
         run: python revisar_telegram.py
 
-      - name: Guardar evidencias
+      - name: Guardar evidencias (incluye registro_tokens.jsonl)
         if: always()
         uses: actions/upload-artifact@v7
         with:
