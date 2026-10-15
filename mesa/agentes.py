@@ -28,8 +28,41 @@ def _cliente_claude():
     return _cliente
 
 
-def llamar_claude(system, mensaje, usar_mcp=False, max_tokens=900):
-    """Envía un mensaje a Claude. Devuelve (texto, herramientas_MCP_usadas)."""
+# ----------------------------------------------------------------------
+# Registro de tokens y presupuesto (guardrail de gasto)
+# ----------------------------------------------------------------------
+REGISTRO_TOKENS = []           # una fila por llamada a Claude en el análisis actual
+
+
+class PresupuestoExcedido(RuntimeError):
+    """El análisis superó MAX_TOKENS_POR_ANALISIS: la cadena se detiene antes de gastar más."""
+
+
+def reiniciar_registro():
+    REGISTRO_TOKENS.clear()
+
+
+def resumen_tokens():
+    entrada = sum(f["entrada"] for f in REGISTRO_TOKENS)
+    salida = sum(f["salida"] for f in REGISTRO_TOKENS)
+    return {"modelo": config.MODELO, "llamadas": list(REGISTRO_TOKENS),
+            "total_entrada": entrada, "total_salida": salida, "total": entrada + salida,
+            "presupuesto": config.MAX_TOKENS_POR_ANALISIS}
+
+
+def registrar_tokens(agente, respuesta):
+    """Anota los tokens que reporta Claude y frena la cadena si se pasa del presupuesto."""
+    uso = getattr(respuesta, "usage", None)
+    REGISTRO_TOKENS.append({"agente": agente,
+                            "entrada": int(getattr(uso, "input_tokens", 0) or 0),
+                            "salida": int(getattr(uso, "output_tokens", 0) or 0)})
+    total = resumen_tokens()["total"]
+    if total > config.MAX_TOKENS_POR_ANALISIS:
+        raise PresupuestoExcedido(f"{total} tokens > presupuesto de {config.MAX_TOKENS_POR_ANALISIS}")
+
+
+def llamar_claude(system, mensaje, usar_mcp=False, max_tokens=900, agente="?"):
+    """Envía un mensaje a Claude. Devuelve (texto, herramientas_MCP_usadas) y registra los tokens."""
     base = dict(model=config.MODELO, max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": mensaje}])
     cliente = _cliente_claude()
@@ -46,7 +79,8 @@ def llamar_claude(system, mensaje, usar_mcp=False, max_tokens=900):
         )
     else:
         respuesta = cliente.messages.create(**base)
-    texto = "".join(b.text for b in respuesta.content if b.type == "text").strip()
+    registrar_tokens(agente, respuesta)
+    texto ="".join(b.text for b in respuesta.content if b.type == "text").strip()
     herramientas = [b.name for b in respuesta.content if b.type == "mcp_tool_use"]
     return texto, herramientas
 
@@ -99,11 +133,14 @@ def agente_recolector(ticker):
     if config.MODO_SIMULACION:
         return ficha_demo(ticker, "modo simulación"), []
     try:
-        texto, herramientas = llamar_claude(PROMPT_RECOLECTOR, f"Acción: {ticker}", usar_mcp=True)
+        texto, herramientas = llamar_claude(PROMPT_RECOLECTOR, f"Acción: {ticker}", usar_mcp=True,
+                                            agente="Iris")
         ficha = extraer_json(texto)
         ficha["ticker"] = ticker
         ficha["fuente"] = "Alpha Vantage vía MCP"
         return ficha, herramientas
+    except PresupuestoExcedido:                    # el guardrail de gasto NO se convierte en datos demo
+        raise
     except Exception as error:                     # MCP caído, cuota agotada o JSON inválido
         return ficha_demo(ticker, f"MCP no disponible: {type(error).__name__}"), []
 
@@ -162,7 +199,7 @@ def agente_analista(ficha):
         lectura = lectura_simulada(indicadores)
     else:
         entrada = json.dumps({"ficha": ficha, "indicadores": indicadores}, ensure_ascii=False)
-        texto, _ = llamar_claude(PROMPT_ANALISTA, entrada)
+        texto, _ = llamar_claude(PROMPT_ANALISTA, entrada, agente="Euler")
         try:
             lectura = extraer_json(texto)
         except ValueError:
@@ -209,7 +246,8 @@ def nota_simulada(analisis):
 def agente_comunicador(analisis):
     if config.MODO_SIMULACION:
         return nota_simulada(analisis)
-    texto, _ = llamar_claude(PROMPT_COMUNICADOR, json.dumps(analisis, ensure_ascii=False), max_tokens=600)
+    texto, _ = llamar_claude(PROMPT_COMUNICADOR, json.dumps(analisis, ensure_ascii=False), max_tokens=600,
+                             agente="Vera")
     if DESCARGO not in texto:                      # garantía aunque el modelo lo olvide
         texto += f"\n\n{DESCARGO}"
     return f"{FIRMA_VERA}\n{texto}"
